@@ -154,7 +154,7 @@ def wind_resistance(psi_deg, U_A, params, rho_air=1.225):
     """
     cx = cx_fujiwara(psi_deg, params)
     AXV = params["AXV"]
-    RAA = 0.5 * rho_air * U_A ** 2 * AXV * (-cx)   # C_X = -C_AA (ITTC定義) -> R_AA = 1/2 rho AXV CAA U^2
+    RAA = 0.5 * rho_air * U_A ** 2 * AXV * (cx)   # C_X = -C_AA (ITTC定義) -> R_AA = 1/2 rho AXV CAA U^2
     return RAA, cx
 
 
