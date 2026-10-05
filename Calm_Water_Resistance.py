@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from ship_params import model1_params as param
+from ship_params import kcs_full as param
 import pandas as pd
 
 class KCS:

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
-from ship_params import model3_params as param
+from ship_params import kcs_full as param
 
 class KCS:
     def __init__(self, is_full_scale=False):
@@ -15,10 +15,12 @@ class KCS:
         # 実験データ(L_pp=3.1589m, v=1.34m/s, S=1.8037m2)から再計算
         # ------------------------------------------------------------------
         wlr = np.array([0.650, 0.850, 1.150, 1.370, 1.950])
-        caw = np.array([74.6, 49.5, 36.9, 22.8, 7.5])
+        caw = np.array([3.20, 7.44, 10.66, 7.81, 1.90])
         
         # extrapolate(外挿)を外し、範囲外は端の値を維持するか0にする安全装置
-        self._caw_f = interp1d(wlr, caw, kind='cubic', bounds_error=False, fill_value=(74.6, 0.0))
+        # self._caw_f = interp1d(wlr, caw, kind='cubic', bounds_error=False, fill_value=(74.6, 0.0))
+        self._caw_f = interp1d(wlr, caw, kind='linear', bounds_error=False,
+                       fill_value=(caw[0], 0.0))
 
         # ------------------------------------------------------------------
         # 角度修正関数 f(chi): EFD の角度依存比率 (chi=0° を 1.0 に正規化)
@@ -42,20 +44,31 @@ class KCS:
         return float(self._angle_f(chi))
 
     def calc_total_R_AW(self, wave_height, wave_length, chi_deg, v_ms=None):
-        """波浪中抵抗増加 [N]"""
-        zeta_a    = wave_height / 2.0
-        C_aw_val  = self.C_aw(wave_length)
+        zeta_a   = wave_height / 2.0
+        C_aw_val = self.C_aw(wave_length)
+        R_aw_0 = (param["rho_water"] * param["g"] * zeta_a ** 2
+                * (param["B_wl"] ** 2 / param["L_pp"]) * C_aw_val)
+        R = R_aw_0 * max(self.angle_factor(chi_deg), 0.0)   # 追波の負値を防ぐ
+        if v_ms is not None:
+            Fr = v_ms / np.sqrt(param["g"] * param["L_pp"])
+            R *= float(np.clip((Fr / 0.26) ** 0.8, 0.0, 1.5))
+        return R
+
+    # def calc_total_R_AW(self, wave_height, wave_length, chi_deg, v_ms=None):
+    #     """波浪中抵抗増加 [N]"""
+    #     zeta_a    = wave_height / 2.0
+    #     C_aw_val  = self.C_aw(wave_length)
         
-        #correct_L_pp = 3.1589
-        #correct_B_wl = 0.442
+    #     #correct_L_pp = 3.1589
+    #     #correct_B_wl = 0.442
         
-        R_aw_0    = (
-            param["rho_water"] * param["g"]
-            * zeta_a ** 2
-            * (param["B_wl"] ** 2 / param["L_pp"])
-            * C_aw_val
-        )
-        return R_aw_0 * self.angle_factor(chi_deg)
+    #     R_aw_0    = (
+    #         param["rho_water"] * param["g"]
+    #         * zeta_a ** 2
+    #         * (param["B_wl"] ** 2 / param["L_pp"])
+    #         * C_aw_val
+    #     )
+    #     return R_aw_0 * self.angle_factor(chi_deg)
 
   #  def calc_delta_ct(self, wave_height, wave_length, chi_deg, v_ms):
   #      """無次元化された抵抗増加係数 ΔCt × 10³"""
