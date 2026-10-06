@@ -22,6 +22,7 @@ from datetime import datetime
 import reproduce_wang2019 as R
 
 ap = argparse.ArgumentParser()
+ap.add_argument("--stage-nm", type=float, default=None, help="ステージ間隔 [nm]")
 ap.add_argument("name", help="便の名前（例 20081224）")
 ap.add_argument("--eta", type=float, default=None, help="目標 ETA [h]（既定: 実績 ETA × 1.05）")
 ap.add_argument("--dt", type=float, default=None, help="時間刻み [h]（既定は reproduce_wang2019.py の DT_TIME_H）")
@@ -30,6 +31,9 @@ ap.add_argument("--half", type=int, default=None, help="横方向の最大半幅
 ap.add_argument("--field", choices=["hs", "resist"], default="hs", help="GIF に出す量")
 ap.add_argument("--no-gif", action="store_true")
 a = ap.parse_args()
+
+if a.stage_nm is not None:
+       R.STAGE_NM = a.stage_nm
 
 # --- 設定の上書き（reproduce_wang2019.py のモジュール変数を書き換える）---
 if a.dt is not None:
