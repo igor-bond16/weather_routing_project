@@ -17,7 +17,7 @@ class KCS:
         self.c14 = 1 + 0.011*param["C_stern"]
         self.Cp = param["Cb"] / param["Cm"]
 
-        self.L_R = param["L_wl"]*(1 - self.Cp + 0.06 * self.Cp * param["LCB"] / (4 * self.Cp - 1))
+        self.L_R = param["L_wl"]*(1 - self.Cp + 0.06 * self.Cp * param["lcb"] / (4 * self.Cp - 1))
                     
         if self.is_full_scale:
             self.one_plus_k1 = (
@@ -65,7 +65,7 @@ class KCS:
 
         i_E =( 
                 1 + 89 * np.exp(-(param["L_wl"] / param["B_wl"])**0.80856 * (1-param["C_wp"])**0.30484 * 
-                (1-self.Cp-0.0225*param["LCB"])**0.6367 * (self.L_R/param["B_wl"])**0.34574 * 
+                (1-self.Cp-0.0225*param["lcb"])**0.6367 * (self.L_R/param["B_wl"])**0.34574 * 
                 (100*param["nabla"]/param["L_wl"]**3)**0.16302)
                               )
         
