@@ -31,7 +31,7 @@ import numpy as np
 from build_grid import (
     RoutingGrid, Node, build_routing_grid, edge_crosses_land, _GEOD, NM_TO_M,
 )
-from Fuel_consumption import (
+from fuel_consumption import (
     SeaState, PropulsionModel, added_resistance_irregular, true_to_apparent_wind,
 )
 from Calm_Water_Resistance import KCS as CalmWaterKCS
