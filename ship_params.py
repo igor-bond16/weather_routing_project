@@ -18,7 +18,9 @@ kcs_full = {
     "rho_air":1.225,
     "g":9.81,
     "S_rudder":115.0,
-    "S_w/o_rudder":9424
+    "S_w/o_rudder":9424,
+    "Viscosity":1.27e-06
+
 }
 
 #2015 Model1 params
