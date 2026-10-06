@@ -9,7 +9,7 @@ import numpy as np
 from build_grid import build_routing_grid, _GEOD, NM_TO_M
 from dijkstra_3d import (build_spatial_edges, FuelModel, make_fuel_cost,
                          solve_3d_dijkstra, relative_angle, KT_TO_MS)
-from Fuel_consumption import PropulsionModel, SeaState
+from fuel_consumption import PropulsionModel, SeaState
 from Calm_Water_Resistance import KCS as CalmWaterKCS
 from Added_Resistance import KCS as AddedResistanceKCS
 from era5_weather import ERA5Weather, download_era5

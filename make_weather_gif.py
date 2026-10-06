@@ -399,7 +399,7 @@ class ResistanceMap:
     def __init__(self, speed_kt):
         from Calm_Water_Resistance import KCS as CalmWaterKCS
         from Added_Resistance import KCS as AddedResistanceKCS
-        from Fuel_consumption import SeaState, added_resistance_irregular
+        from fuel_consumption import SeaState, added_resistance_irregular
         from wind_resistance import wind_resistance, KCS_FULL_LOAD
 
         self.v = speed_kt * KT_TO_MS
