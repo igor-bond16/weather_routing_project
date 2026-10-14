@@ -75,7 +75,7 @@ def added_resistance_irregular(added_model, sea_state, v_ms,
     C_aw テーブルを Faltinsen短波近似などで拡張してから範囲を広げること。
     """
     omega = np.linspace(omega_min, omega_max, n_points)
-    T1 = 0.834 * sea_state.Tp
+    T1 = sea_state.Tp
     S = bretschneider_spectrum(omega, sea_state.Hs, T1)
 
     wave_length = 2 * np.pi * G / omega ** 2

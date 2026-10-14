@@ -13,7 +13,7 @@ from dijkstra_3d import WeatherPoint
 
 ERA5_VARS = [
     "significant_height_of_combined_wind_waves_and_swell",  # swh
-    "peak_wave_period",                                     # pp1d
+    "mean_wave_period_based_on_first_moment",               # mp1
     "mean_wave_direction",                                  # mwd（波が来る方向, 真北基準）
     "10m_u_component_of_wind",                              # u10
     "10m_v_component_of_wind",                              # v10
