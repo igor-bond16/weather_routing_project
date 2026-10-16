@@ -52,6 +52,8 @@ class WeatherPoint:
     wave_from_deg: float    # 波が来る方向（北=0, 時計回り）[deg]
     wind_speed: float       # 真風速 [m/s]
     wind_from_deg: float    # 風が吹いてくる方向（北=0, 時計回り）[deg]
+    u_current: float = 0.0  # 追加
+    v_current: float = 0.0  # 追加
 
 
 # weather(lat, lon, t_h) -> WeatherPoint  の形の関数を渡す。
@@ -105,27 +107,45 @@ class FuelModel:
             self._calm_cache[vkey] = float(self.calm.calc_calm_water_resistance(v_ms))
         return self._calm_cache[vkey]
 
-    def rate(self, v_kt: float, sea: SeaState):
+    def rate(self, v_kt: float, heading_deg: float, sea: SeaState):
         """戻り値: (燃料 [ton/day], 軸馬力 [kW])。出力上限超過なら None。"""
-        key = (round(v_kt * 10), round(sea.Hs * 10), round(sea.Tp),
+        
+        # 1. 対水速度(v_water_ms)を正しく計算する
+        v_g_ms = v_kt * KT_TO_MS
+        heading_rad = math.radians(heading_deg)
+        u_ship = v_g_ms * math.sin(heading_rad)
+        v_ship = v_g_ms * math.cos(heading_rad)
+        
+        u_water = u_ship - sea.u_current
+        v_water = v_ship - sea.v_current
+        v_water_ms = math.hypot(u_water, v_water)
+
+        # 2. キャッシュキーに対水速度を使う
+        key = (round(v_water_ms * 10), round(sea.Hs * 10), round(sea.Tp),
                round(sea.wave_dir_rel_deg / 5), round(sea.wind_speed_true),
                round(sea.wind_dir_rel_deg / 5))       
         if key in self._rate_cache:
             return self._rate_cache[key]
 
-        v_ms = (key[0] / 10.0) * KT_TO_MS
+        # 3. 以下のすべての抵抗計算で v_ms ではなく v_water_ms を使用する
         q = SeaState(Hs=key[1] / 10.0, Tp=max(float(key[2]), 1.0),
                      wave_dir_rel_deg=key[3] * 5.0,
-                     wind_speed_true=float(key[4]), wind_dir_rel_deg=key[5] * 5.0)        
-        r_calm = self._r_calm(key[0], v_ms)
-        r_aw = (added_resistance_irregular(self.added, q, v_ms, n_points=self.n_omega)
+                     wind_speed_true=float(key[4]), wind_dir_rel_deg=key[5] * 5.0,
+                     u_current=0.0, v_current=0.0)
+        
+        r_calm = self._r_calm(key[0], v_water_ms)
+        r_aw = (added_resistance_irregular(self.added, q, v_water_ms, n_points=self.n_omega)
                 if q.Hs >= 0.25 else 0.0)
-        u_a, psi_a = true_to_apparent_wind(v_ms, q.wind_speed_true, q.wind_dir_rel_deg)
+        u_a, psi_a = true_to_apparent_wind(v_water_ms, q.wind_speed_true, q.wind_dir_rel_deg)
         r_aa, _ = wind_resistance(psi_a, u_a, self.wind_params)
         r_aa = float(np.atleast_1d(r_aa)[0])
 
+        if getattr(self, '_debug_count', 0) < 30:
+            print(f"[抵抗デバッグ] Hs: {q.Hs:4.1f}m | R_calm: {r_calm:7.1f} | R_aw: {r_aw:7.1f} | R_aa: {r_aa:7.1f}")
+            self._debug_count = getattr(self, '_debug_count', 0) + 1
+
         r_total = max(r_calm + r_aw + r_aa, 0.0)
-        out = self.prop.power_and_fuel(r_total, v_ms)
+        out = self.prop.power_and_fuel(r_total, v_water_ms)
         p_s = out["P_S [kW]"]
         result = None if (self.max_power_kw and p_s > self.max_power_kw) \
             else (out["Fuel [ton/day]"], p_s)
@@ -181,7 +201,7 @@ class EdgeContext:
 def make_fuel_cost(fuel_model: FuelModel):
     """コスト = 燃料消費率 * 航海時間 （論文 Eq.(6),(9)）。不可なら None。"""
     def cost(ctx: EdgeContext, v_kt: float, dur_h: float):
-        r = fuel_model.rate(v_kt, ctx.sea)
+        r = fuel_model.rate(v_kt, ctx.edge.heading_deg,ctx.sea)
         return None if r is None else r[0] * dur_h / 24.0
     return cost
 
@@ -308,6 +328,8 @@ def solve_3d_dijkstra(
                 wave_dir_rel_deg=relative_angle(w.wave_from_deg, e.heading_deg),
                 wind_speed_true=w.wind_speed,
                 wind_dir_rel_deg=relative_angle(w.wind_from_deg, e.heading_deg),
+                u_current=w.u_current, 
+                v_current=w.v_current   
             )
             ctx = EdgeContext(e, departure_h + t_h, w, sea)
 

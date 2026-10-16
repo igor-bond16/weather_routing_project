@@ -473,11 +473,9 @@ def load_route_csv(path):
 
 def great_circle_from_paper(name):
     """reproduce_wang2019.py の設定から、大圏の点列と船速 Vf を作る。"""
-    from reproduce_wang2019 import PAPER, calibrate_west_lon
+    from reproduce_wang2019 import PAPER, get_endpoints
     ref = PAPER[name]
-    east_pt, west_lat = (49.3, -10.0), 46.5
-    west_pt = (west_lat, calibrate_west_lon(east_pt, west_lat, ref["GC"][2]))
-    start, end = (west_pt, east_pt) if ref["dir"] == "E" else (east_pt, west_pt)
+    start, end = get_endpoints(ref["dir"])
     mid = _GEOD.npts(start[1], start[0], end[1], end[0], 26)          # (lon, lat)
     pts = [start] + [(la, lo) for lo, la in mid] + [end]
     dist_nm = _GEOD.inv(start[1], start[0], end[1], end[0])[2] / 1852.0

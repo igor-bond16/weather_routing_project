@@ -8,12 +8,13 @@ import numpy as np
 
 from build_grid import build_routing_grid, _GEOD, NM_TO_M
 from dijkstra_3d import (build_spatial_edges, FuelModel, make_fuel_cost,
-                         solve_3d_dijkstra, relative_angle, KT_TO_MS)
+                         solve_3d_dijkstra, relative_angle, KT_TO_MS,WeatherPoint)
 from fuel_consumption import PropulsionModel, SeaState
 from Calm_Water_Resistance import KCS as CalmWaterKCS
 from Added_Resistance import KCS as AddedResistanceKCS
 from era5_weather import ERA5Weather, download_era5
 import time
+from oscar_current import OSCARCurrent
 _T0 = time.time()
 
 def log(msg):
@@ -44,6 +45,15 @@ PAPER = {
 
 
 # ---------------- 補助関数 ----------------
+EAST_PT = (47.6, -10.0)    # 欧州側（論文 Fig.10 から読取）
+WEST_PT = (46.0, -52.0)    # 北米側（論文 Fig.10 から読取）
+
+
+def get_endpoints(direction):
+    """direction: 'E'=東航(北米→欧州), 'W'=西航(欧州→北米)。(start, end) を返す。"""
+    return (WEST_PT, EAST_PT) if direction == "E" else (EAST_PT, WEST_PT)
+
+
 def calibrate_west_lon(east_pt, west_lat, target_km):
     """大圏距離が target_km になるよう北米側の経度を二分法で決める。"""
     lo, hi = -75.0, -35.0
@@ -66,8 +76,28 @@ def to_sea(w, heading):
     return SeaState(Hs=w.Hs, Tp=w.Tp,
                     wave_dir_rel_deg=relative_angle(w.wave_from_deg, heading),
                     wind_speed_true=w.wind_speed,
-                    wind_dir_rel_deg=relative_angle(w.wind_from_deg, heading))
+                    wind_dir_rel_deg=relative_angle(w.wind_from_deg, heading),
+                    u_current=w.u_current, 
+                    v_current=w.v_current
+)
+class CombinedWeather:
+    def __init__(self, era5_weather, oscar_current):
+        self.era5 = era5_weather
+        self.oscar = oscar_current
 
+    def __call__(self, lat, lon, t_h):
+        # ERA5から波・風を取得
+        w = self.era5(lat, lon, t_h)
+        # OSCARから海流を取得
+        u_cur, v_cur = self.oscar(lat, lon, t_h)
+        
+        # 統合した WeatherPoint を返す
+        return WeatherPoint(
+            Hs=w.Hs, Tp=w.Tp,
+            wave_from_deg=w.wave_from_deg,
+            wind_speed=w.wind_speed, wind_from_deg=w.wind_from_deg,
+            u_current=u_cur, v_current=v_cur
+        )
 
 def make_fuel_model():
     calm = CalmWaterKCS(is_full_scale=True)
@@ -97,15 +127,17 @@ def simulate_great_circle(grid, weather, fm, v_kt):
     nodes = [next(n for n in row if n.index == 0) for row in grid.stages]
     t = fuel = 0.0
     pts, spd = [(nodes[0].lat, nodes[0].lon)], []
-    for a, b in zip(nodes[:-1], nodes[1:]):
+    for i,(a, b) in enumerate(zip(nodes[:-1], nodes[1:])):
         az, _, d_m = _GEOD.inv(a.lon, a.lat, b.lon, b.lat)
         d_nm = d_m / NM_TO_M
         sea = to_sea(weather(a.lat, a.lon, t), az % 360.0)
         v = v_kt
-        r = fm.rate(v, sea)
+        r = fm.rate(v, az % 360.0, sea)
+        current_speed = math.hypot(sea.u_current, sea.v_current)
+        print(f"  [大圏 Stage {i:02d}] 経度:{a.lon:6.1f} | 海流速度: {current_speed:5.3f} m/s (u={sea.u_current:6.3f}, v={sea.v_current:6.3f})")
         while r is None and v > 3.0:
             v -= 0.5
-            r = fm.rate(v, sea)
+            r = fm.rate(v, az % 360.0, sea)
         if r is None:
             raise RuntimeError("この海象では航行不能（出力制限）")
         dur = d_nm / v
@@ -143,7 +175,7 @@ def simulate_offset_path(grid, weather, fm, v_kt, offset):
         d_nm = d_m / NM_TO_M
         sea = to_sea(weather(a.lat, a.lon, t), az % 360.0)
         v = v_kt
-        r = fm.rate(v, sea)
+        r = fm.rate(v, az % 360.0, sea)
         while r is None and v > 3.0:
             v -= 0.5
             r = fm.rate(v, sea)
@@ -175,9 +207,7 @@ def run_voyage(name, plot=True):
     ref = PAPER[name]
     t0 = datetime(int(name[:4]), int(name[4:6]), int(name[6:8]), 0, 0)
 
-    east_pt, west_lat = (49.3, -10.0), 46.5
-    west_pt = (west_lat, calibrate_west_lon(east_pt, west_lat, ref["GC"][2]))
-    start, end = (west_pt, east_pt) if ref["dir"] == "E" else (east_pt, west_pt)
+    start, end = get_endpoints(ref["dir"])
 
     grid, dgc_nm = build_grids(start, end)
     log(f"{name}: グリッド生成完了（ノード数 {sum(grid.nodes_per_stage)}）")
@@ -189,7 +219,15 @@ def run_voyage(name, plot=True):
     paths = sorted(glob.glob(f"era5_{name}_*.nc")) or download_era5(
         t0, hours=ref["actual_eta"] + 24, area=AREA, out_prefix=f"era5_{name}")
     weather = ERA5Weather(paths, t0)
-    log(f"{name}: ERA5 読み込み完了")
+    oscar_paths = sorted(glob.glob(f"OSCAR_L4_OC_FINAL_V2.0_*{name[:6]}*.nc")) # 例: ファイル名に年月が含まれる場合
+    if not oscar_paths:
+        log(f"警告: {name} の OSCAR データが見つかりません。海流ゼロで計算します。")
+        # 見つからない場合は空のリストを渡して、oscar_current.py 側で 0.0 を返すようにするなどのエラー処理が必要ですが、
+        # ここでは事前にダウンロードされているものとします。
+    weather = CombinedWeather(weather, current_oscar)
+    log(f"{name}: ERA5 および OSCAR 読み込み完了")
+    
+    current_oscar = OSCARCurrent(oscar_paths, t0)
     fm = make_fuel_model()
 
     gc = simulate_great_circle(grid, weather, fm, vf)

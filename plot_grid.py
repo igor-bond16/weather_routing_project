@@ -84,7 +84,7 @@ def plot_grid(grid, draw_edges=False, max_index_diff=1,
     ax.scatter(_unwrap(grid.end[1], ref), grid.end[0], s=90, c="gold",
                edgecolors="k", transform=PC, label="end", zorder=6)
 
-    ax.set_title(f"Routing grid ({grid.num_stages} stages, dy={grid.dy_nm:g} nm)")
+    ax.set_title(f"Routing grid2 ({grid.num_stages} stages, dy={grid.dy_nm:g} nm)")
     ax.legend(loc="lower left")
     return ax
 

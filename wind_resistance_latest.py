@@ -122,8 +122,8 @@ psi_fine = np.linspace(0, 180, 200)
 cx_fine_model = cx_interpolator(psi_fine)
 
 plt.figure(figsize=(9, 5))
-plt.plot(psi_fine, cx_fine_model, 'b-', label='My Model (KCS Custom, ITTC 6750TEU)', linewidth=2)
-plt.plot(psi_fuji, cx_fuji, 'g--', label='Fujiwara (2005) Estimate (KCS actual dims)', linewidth=2)
+plt.plot(psi_fine, cx_fine_model, 'g-', label='My Model (KCS Custom, ITTC 6750TEU)', linewidth=2)
+plt.plot(psi_fuji, cx_fuji, 'b--', label='Fujiwara (2005) Estimate (KCS actual dims)', linewidth=2)
 plt.plot(psi_paper, cx_paper, 'ro', label='Paper Data (Andersen 2013, 9000+TEU EFD)', markersize=4, alpha=0.8)
 
 plt.axhline(0, color='gray', linestyle='--', linewidth=0.8)

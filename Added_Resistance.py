@@ -3,8 +3,10 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from ship_params import kcs_full as param
 
+from scipy.special import i1, k1
+
 class KCS:
-    def __init__(self, is_full_scale=False):
+    def __init__(self, is_full_scale=False, L_bwl=75.0, ratio_zero=0.30):
         self.is_full_scale = is_full_scale
 
         #watted area
@@ -29,11 +31,56 @@ class KCS:
         ef = np.array([9.18, 7.99, 2.76, 3.57, -0.47])
         ef = ef / ef[0]
         self._angle_f = interp1d(ea, ef, kind='cubic', bounds_error=False, fill_value=(1.0, -0.051))
+        # ------------------------------------------------------------------
+        # 追加：短波長域 (λ/L < 0.65) の推定用パラメータ設定
+        # ------------------------------------------------------------------
+        self.L_bwl = L_bwl
+        self.draft = param["T"]  # ship_params.py の "T" を使用
+        self.r0 = ratio_zero
+        L = param["L_pp"]
+        B = param["B_wl"]
+        
+        # プラトー値 σ_p
+        self._sigma_p = 0.5 * (L / B) * np.sqrt(B / self.L_bwl)
+        self._r_edge = 0.65
+        self._caw_edge = float(self._caw_f(self._r_edge))
+        
+        # 境界での反射成分と運動成分
+        refl_edge = self._sigma_p * self._alpha_T(self._r_edge * L)
+        self._motion_edge = max(self._caw_edge - refl_edge, 0.0)
+
+        # ------------------------------------------------------------------
+        # 追加：長波長域 (λ/L > 1.95) の推定用パラメータ設定
+        # (ITTC 2014 STAwave-2 の長波長漸近特性に基づく)
+        # ------------------------------------------------------------------
+        self._r_long_edge = wlr[-1]   # 1.950
+        self._caw_long_edge = caw[-1] # 1.90
+
+    def _alpha_T(self, wave_length):
+        """喫水減衰係数 α_T の計算"""
+        x = 2.0 * np.pi / wave_length * self.draft
+        x = 2.0 * x
+        pi2i = (np.pi * i1(x)) ** 2
+        return float(pi2i / (pi2i + k1(x) ** 2))
 
     def C_aw(self, wave_length):
         """波長から C_aw を返す（スプライン補間）"""
        # correct_L_pp = 3.1589 
         ratio = wave_length / param["L_pp"]
+        
+        # ① 短波長域 (λ/L < 0.65): 反射成分と運動成分で推定 (STAwave-1の考え方を拡張)
+        if ratio < self._r_edge:
+            refl = self._sigma_p * self._alpha_T(wave_length)
+            motion = self._motion_edge * max((ratio - self.r0) / (self._r_edge - self.r0), 0.0)
+            return float(refl + motion)
+            
+        # ② 長波長域 (λ/L > 1.95): ITTC 2014 STAwave-2 に準拠した長波長漸近減衰
+        if ratio > self._r_long_edge:
+            # STAwave-2の ω^11 減衰特性は、波長比 λ/L の -5.5 乗に相当する
+            decay = (ratio / self._r_long_edge) ** -5.5
+            return float(self._caw_long_edge * decay)
+            
+        # ③ 表の範囲内 (0.65 <= λ/L <= 1.95): スプライン補間値を使用
         return float(self._caw_f(ratio))
 
     def angle_factor(self, chi_deg):

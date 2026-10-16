@@ -21,6 +21,24 @@ from datetime import datetime
 
 import reproduce_wang2019 as R
 
+import copy, dataclasses
+
+class ScaledWeather:
+    """Hs を k 倍して返す（感度試験用）。他の属性は元のオブジェクトに任せる。"""
+    def __init__(self, base, k):
+        self._b, self._k = base, k
+    def __call__(self, lat, lon, t):
+        w = self._b(lat, lon, t)
+        if dataclasses.is_dataclass(w):
+            return dataclasses.replace(w, Hs=w.Hs * self._k)
+        if hasattr(w, "_replace"):
+            return w._replace(Hs=w.Hs * self._k)
+        w = copy.copy(w)
+        w.Hs = w.Hs * self._k
+        return w
+    def __getattr__(self, name):
+        return getattr(self._b, name)
+
 ap = argparse.ArgumentParser()
 ap.add_argument("--stage-nm", type=float, default=None, help="ステージ間隔 [nm]")
 ap.add_argument("name", help="便の名前（例 20081224）")
@@ -30,6 +48,7 @@ ap.add_argument("--lat-div", type=int, default=None, help="横間隔の分割数
 ap.add_argument("--half", type=int, default=None, help="横方向の最大半幅（ノード数）")
 ap.add_argument("--field", choices=["hs", "resist"], default="hs", help="GIF に出す量")
 ap.add_argument("--no-gif", action="store_true")
+ap.add_argument("--hs-scale", type=float, default=1.0, help="Hs を k 倍する（感度試験）")
 a = ap.parse_args()
 
 if a.stage_nm is not None:
@@ -53,9 +72,7 @@ name = a.name
 ref = R.PAPER[name]
 t0 = datetime(int(name[:4]), int(name[4:6]), int(name[6:8]), 0, 0)
 
-east_pt, west_lat = (49.3, -10.0), 46.5
-west_pt = (west_lat, R.calibrate_west_lon(east_pt, west_lat, ref["GC"][2]))
-start, end = (west_pt, east_pt) if ref["dir"] == "E" else (east_pt, west_pt)
+start, end = R.get_endpoints(ref["dir"])
 
 grid, dgc_nm = R.build_grids(start, end)
 vf = dgc_nm / ref["actual_eta"]
@@ -64,8 +81,21 @@ print(f"{name}: ノード数 {sum(grid.nodes_per_stage)}  Vf {vf:.2f} kn  DT {R.
 paths = sorted(glob.glob(f"era5_{name}_*.nc")) or R.download_era5(
     t0, hours=ref["actual_eta"] + 24, area=R.AREA, out_prefix=f"era5_{name}")
 weather = R.ERA5Weather(paths, t0)
-fm = R.make_fuel_model()
+from oscar_current import OSCARCurrent
+# earthaccessでダウンロードしたファイル名（oscar... や OSCAR...）をすべて取得
+oscar_paths = sorted(glob.glob("*oscar*.nc") + glob.glob("*OSCAR*.nc"))
+if not oscar_paths:
+    raise FileNotFoundError("OSCARのNetCDFファイルが見つかりません。ダウンロードできているか確認してください。")
+current_oscar = OSCARCurrent(oscar_paths, t0)
 
+# 3. 追加: ERA5とOSCARを結合
+weather = R.CombinedWeather(weather, current_oscar)
+if a.hs_scale != 1.0:
+    weather = ScaledWeather(weather, a.hs_scale)
+fm = R.make_fuel_model()
+# 海流データがちゃんと読み込めているかテスト（出発地、時刻0での海流）
+test_u, test_v = current_oscar(grid.stages[0][0].lat, grid.stages[0][0].lon, 0.0)
+print(f"【デバッグ】出発地の海流: u={test_u:.3f} m/s, v={test_v:.3f} m/s")
 gc = R.simulate_great_circle(grid, weather, fm, vf)
 
 eta = a.eta if a.eta is not None else round(ref["actual_eta"] * 1.05, 1)

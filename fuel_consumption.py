@@ -44,6 +44,8 @@ class SeaState:
     wave_dir_rel_deg: float   # 波向き(船首基準の相対角)[deg] 0=向波(船首から)
     wind_speed_true: float    # 真風速(海面上10m基準)[m/s]
     wind_dir_rel_deg: float   # 真風向(船首基準の相対角)[deg] 0=向かい風
+    u_current: float = 0.0  # 追加: 海流 u成分(東向き) [m/s]
+    v_current: float = 0.0  # 追加: 海流 v成分(北向き) [m/s]
 
 
 def bretschneider_spectrum(omega, Hs, T1):
@@ -110,23 +112,36 @@ def true_to_apparent_wind(v_ms, wind_speed_true, wind_dir_true_rel_deg):
 # ----------------------------------------------------------------------
 # 3. 全抵抗成分の統合
 # ----------------------------------------------------------------------
-def total_resistance(v_ms, sea_state: SeaState,
+def total_resistance(v_g_ms, heading_deg, sea_state: SeaState,
                       calm_model: CalmWaterKCS, added_model: AddedResistanceKCS,
                       wind_params=None):
     """3成分を積み上げ、内訳と合計 [N] を辞書で返す"""
     wind_params = wind_params or KCS_FULL_LOAD
 
-    R_calm = float(calm_model.calc_calm_water_resistance(v_ms))
-    R_aw = added_resistance_irregular(added_model, sea_state, v_ms)
+    # 1. 船の対地ベクトル (北=0度, 東=90度)
+    heading_rad = np.radians(heading_deg)
+    u_ship = v_g_ms * np.sin(heading_rad) # 東向き速度
+    v_ship = v_g_ms * np.cos(heading_rad) # 北向き速度
 
-    U_A, psi_A = true_to_apparent_wind(v_ms, sea_state.wind_speed_true,
+    # 2. 対水速度ベクトルの計算 (対地 - 海流)
+    u_water = u_ship - sea_state.u_current
+    v_water = v_ship - sea_state.v_current
+    
+    # 実際の対水速度 [m/s] (これが抵抗計算のベースになる)
+    v_water_ms = float(np.hypot(u_water, v_water))
+
+    R_calm = float(calm_model.calc_calm_water_resistance(v_water_ms))
+    R_aw = added_resistance_irregular(added_model, sea_state, v_water_ms)
+
+    U_A, psi_A = true_to_apparent_wind(v_water_ms, sea_state.wind_speed_true,
                                         sea_state.wind_dir_rel_deg)
     R_aa, _ = wind_resistance(psi_A, U_A, wind_params)
     R_aa = float(np.atleast_1d(R_aa)[0])
 
     R_total = R_calm + R_aw + R_aa
     return {
-        "V_s [m/s]": v_ms, "R_calm [N]": R_calm, "R_AW [N]": R_aw,
+        "V_g [m/s]": v_g_ms, "V_water [m/s]": v_water_ms, # 対地・対水速度を記録
+        "R_calm [N]": R_calm, "R_AW [N]": R_aw,
         "R_AA [N]": R_aa, "U_A [m/s]": U_A, "psi_A [deg]": psi_A,
         "R_total [N]": R_total,
     }

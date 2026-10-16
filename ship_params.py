@@ -75,3 +75,20 @@ model3_params = {
     "S_w/o_rudder":kcs_full["S_w/o_rudder"]*(ratio_3**2),
     "Viscosity":1.27e-06
 }
+
+# --- 論文 (Wang et al. 2019, Table 1) の 2800TEU コンテナ船 ---
+ship2800_full = dict(kcs_full)              # 載っていない項目は KCS の値のまま
+ship2800_full.update({
+    "L_pp": 232.0,
+    "L_wl": 234.5,            # 論文に記載なし。KCS の L_wl/L_pp (=1.0109) を仮定
+    "B_wl": 32.2,
+    "D": 19.0,
+    "T": 10.78,
+    "Cb": 0.685,
+    "nabla": 55164,           # Cb × L_pp × B × T（KCS の 52030 も同じ式で再現できる）
+    "S_w/o_rudder": 9690,     # KCS の 9424 に、Holtrop の湿面積式の比 (1.028) をかけた値
+})
+
+import os
+if os.environ.get("SHIP") == "2800teu":
+    kcs_full.update(ship2800_full)          # 辞書の中身を直接書き換える（他のファイルからも見える）

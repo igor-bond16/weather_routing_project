@@ -119,7 +119,7 @@ class ERA5Weather:
         self._lon_360 = lon.max() > 180.0
 
         swh = ds["swh"].fillna(0.0).values           # 陸上は NaN → 静穏として扱う
-        pp1d = ds["pp1d"].fillna(0.0).values
+        pp1d = ds["mp1"].fillna(0.0).values
         mwd = np.deg2rad(ds["mwd"].values)           # 方向は sin/cos で補間
         u10, v10 = ds["u10"].fillna(0.0).values, ds["v10"].fillna(0.0).values
         data = np.stack([swh, pp1d, np.nan_to_num(np.sin(mwd)),

@@ -1,207 +1,191 @@
 # -*- coding: utf-8 -*-
 """
-KCS(満載状態)の風圧抵抗計算モデル
-====================================
+KCS(満載状態, 3600TEU, container_ship.py v3ジオメトリ準拠)の風圧抵抗計算モデル
+================================================================================
 
 参考文献:
-  [1] Fujiwara, T., Tsukada, Y., Kitamura, F., Sawada, H., Ohmatsu, S. (2009).
-      "Experimental Investigation and Estimation on Wind Forces for a Container Ship,"
-      Proc. ISOPE 2009.  ―― ユーザー提供論文。満載(container形状に欠落/過積載が無い)状態では
-      本論文の補正項(A_RC/A_OD に依存する項)はゼロとなり、Fujiwara et al.(2005a, 2006)の
-      オリジナルの物理コンポーネントモデルに帰着する。
-  [2] ITTC – Recommended Procedures and Guidelines 7.5-04-01-01.2 "Analysis of Speed/Power
-      Trial Data", Appendix C.3 "Regression formula by Fujiwara et al." ―― [1]式(3)と同一の
-      構造を持つ公式回帰式・回帰係数表(Table C-2)を採用。
+  Fujiwara, T., Ueno, M., Ikeda, Y. (2005).
+  "成分分離型モデルを利用した新しい風圧力推定法"
+  日本船舶海洋工学会論文集 第2号, pp.243-255.
+  ("A New Estimation Method of Wind Forces and Moments acting on Ships
+    on the basis of Physical Component Models")
 
-モデルの位置づけ
-----------------
-* 計算するのは船体前後方向(縦方向)の風圧抵抗係数 C_X (= -C_AA) のみ。
-  KCSの「風圧“抵抗”」という要求に対応する量である(横力 Y_A・回頭モーメント N_A を
-  含む3分力全体が必要な場合は、Fujiwara(2005a)の完全版(C_Y, C_N も回帰)が必要だが、
-  その回帰係数表は本ツールでは未実装。必要であれば拡張可能)。
-* KCS(MOERI Container Ship, SIMMAN2008)は「仮想実験用ベアハル」であり、上部構造物
-  (ブリッジ・コンテナ積付け)の形状が公式には定義されていない。したがって A_F, A_L, A_OD,
-  C, H_BR, H_C は、同型の実在コンテナ船例(本論文 Table 1: 300m/6500TEU船)を参考に、
-  KCSの主要目(Lpp=230m, B=32.2m, D=19.0m, d=10.8m, 3600TEU級)に対して工学的に見積もった
-  値である。実際の一般配置図がある場合は、KCS_FULL_LOAD の値を置き換えてください。
+係数について
+------------
+Table 3 の回帰係数を直接使用。Ro-Ro旅客船の実測データ(同論文 Table A-1,
+Fig.14)で符号・オーダーを検算済み:
+  CX(psi=0)   = -0.463  (逆風で負の抵抗 -> 符号OK)
+  CX(psi=180) = +0.571  (追い風で正の推力 -> 符号OK)
 
-単位系: SI(m, m^2, kg/m^3, m/s, N)
+  ※以前検討していた「ITTC 7.5-04-01-01.2」ベースの係数セットは、0-90度域
+    の符号が本実装と全て反転しており(OCR誤りの疑い)、不採用とした。
+
+8パラメータについて
+--------------------
+container_ship.py (v3) の compute_AL_summary() / compute_AF_components() の
+計算結果をそのまま使用。KCS 3600TEU・満載・船尾コンテナ5段のジオメトリ
+から直接算出した実値であり、他船型からのスケーリング値ではない。
+
+【重要】C の符号規約の違いに注意
+  container_ship.py の C は「正の値 = 重心が船尾側」と定義されている
+  (= midship - x_c)。一方、Fujiwara原論文の C は「船首方向が正」
+  (= x_c - midship)。このモデルでは Fujiwara の規約に統一するため、
+  container_ship.py の出力 C_script をそのまま使わず、符号を反転させた
+  値 (C = x_c - midship) を KCS_FULL_LOAD に格納している。
+
+  container_ship.py 側の計算結果: x_c=106.25m (AP基準), midship=115.0m
+    -> C_script (船尾側が正) = +8.75 m
+    -> C_fujiwara (船首方向が正) = -8.75 m  ← 本ファイルではこちらを使用
+
+A_OD についての注意
+  Fujiwara の A_OD は「デッキ上構造物の側面投影面積」であり、ブリッジ
+  だけでなく甲板上コンテナも含む。container_ship.py の凡例ラベル
+  「ブリッジ A_OD: 270m²」はブリッジ単体の面積であり、Fujiwara式に渡す
+  A_OD はコンテナ(船尾671+船首1476.2)+ブリッジ270 の合計 2417.2 m² が
+  正しい。
+
+単位系: SI (m, m^2, kg/m^3, m/s, N)
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 # ----------------------------------------------------------------------
-# 1. Fujiwara回帰式の係数表 (ITTC 7.5-04-01-01.2, Table C-2)
+# 1. Fujiwara(2005) 回帰式の係数表 (Table 3, 検算済み)
 # ----------------------------------------------------------------------
-# 各行 i=1: 0<=psi<=90(deg) 用、i=2: 90<psi<=180(deg) 用
-# 列 j=0..4 は各回帰式の定数項・説明変数の係数(未使用項は0)
-BETA  = np.array([[ 0.922, -0.507, -1.162,  0.000,  0.000],   # C_LF   (i=1: 0-90deg)
-                   [-0.018,  5.091,-10.367,  3.011,  0.341]])  # C_LF   (i=2: 90-180deg)
-
-DELTA = np.array([[-0.458, -3.245,  2.313,  0.000,  0.000],   # C_XLI  (i=1: 0-90deg)
-                   [ 1.901,-12.727,-24.407, 40.310,  5.481]])  # C_XLI  (i=2: 90-180deg)
-
-EPS   = np.array([[ 0.585,  0.906, -3.239,  0.000,  0.000],   # C_ALF  (i=1: 0-90deg)
-                   [ 0.314,  1.117,  0.000,  0.000,  0.000]])  # C_ALF  (i=2: 90-180deg)
-
-MU = 10.0  # deg, psi=90deg付近の平滑化幅 (ITTC推奨値)
+_ALPHA = {0: 0.404, 1: 0.368, 2: 0.902}                              # C_CF   (eq.12)
+_BETA1 = {0: -0.922, 1: 0.507, 2: 1.162}                              # C_LF1  (eq.14, 0-90deg)
+_BETA2 = {0: 0.018, 1: -5.091, 2: 10.367, 3: -3.011, 4: -0.341}       # C_LF2  (eq.15, 90-180deg)
+_GAMMA1 = {0: 0.116, 1: 3.345}                                        # C_YM1  (eq.17, 0-90deg)
+_GAMMA2 = {0: 0.446, 1: 2.192}                                        # C_YM2  (eq.18, 90-180deg)
+_DELTA1 = {0: 0.458, 1: 3.245, 2: -2.313}                             # C_XLI1 (eq.19, 0-90deg)
+_DELTA2 = {0: -1.901, 1: 12.727, 2: 24.407, 3: -40.310, 4: -5.481}    # C_XLI2 (eq.20, 90-180deg)
+_EPS1 = {0: -0.585, 1: -0.906, 2: 3.239}                              # C_ALF1 (eq.21, 0-90deg)
+_EPS2 = {0: -0.314, 1: -1.117}                                        # C_ALF2 (eq.22, 90-180deg)
 
 
-def _CLF_0_90(p):
-    return (BETA[0, 0]
-            + BETA[0, 1] * p["AYV"] / (p["LOA"] * p["B"])
-            + BETA[0, 2] * p["CMC"] / p["LOA"])
-
-
-def _CXLI_0_90(p):
-    return (DELTA[0, 0]
-            + DELTA[0, 1] * p["AXV"] / p["AYV"]
-            + DELTA[0, 2] * p["B"] / p["HBR"])
-
-
-def _CALF_0_90(p):
-    return (EPS[0, 0]
-            + EPS[0, 1] * p["B"] / p["LOA"]
-            + EPS[0, 2] * p["AOD"] / p["AYV"])
-
-
-# ----------------------------------------------------------------------
-# 【重要な注意】90°<psi<=180°(追い風寄り)域の回帰式について
-# ----------------------------------------------------------------------
-# 0-90度域の式(_CLF_0_90, _CXLI_0_90, _CALF_0_90)は複数の独立文献で構造・
-# 係数を突き合わせ、計算結果も C_X ~ O(1) という物理的に妥当な範囲に収まる
-# ことを確認済み。
-#
-# 一方、90-180度域の式(以下)は、出典(ITTC 7.5-04-01-01.2 Appendix C.3)の
-# OCR抽出テキストに文字化けがあり、5つの説明変数(A_YV, A_XV, A_OD, B, H_BR,
-# H_C, LOAの組み合わせ)の対応関係を完全には復元できていません。
-# 下記は工学的に妥当な無次元比になるよう調整した「最善推定」であり、
-# 計算すると C_X が過大(|C_X|>5)になる場合があるため、追い風寄りの角度に
-# ついて精度が必要な場合は、原著(Fujiwara et al., 2005a/2006、または
-# ITTC 7.5-04-01-01.2 PDFのTable C-2・式C-5〜C-7)を直接確認してください。
-# ----------------------------------------------------------------------
-def _CLF_90_180(p):
-    return (BETA[1, 0]
-            + BETA[1, 1] * p["B"] / p["HBR"]
-            + BETA[1, 2] * p["AOD"] / (p["LOA"] ** 2)
-            + BETA[1, 3] * p["AXV"] / p["B"] ** 2
-            + BETA[1, 4] * p["HC"] / p["LOA"])
-
-
-def _CXLI_90_180(p):
-    return (DELTA[1, 0]
-            + DELTA[1, 1] * p["AYV"] / (p["LOA"] * p["HBR"])
-            + DELTA[1, 2] * p["AXV"] / p["AYV"]
-            + DELTA[1, 3] * p["B"] / p["LOA"]
-            + DELTA[1, 4] * p["AXV"] / (p["B"] * p["HBR"]))
-
-
-def _CALF_90_180(p):
-    return (EPS[1, 0] + EPS[1, 1] * p["AYV"] / p["AOD"])
-
-
-def cx_fujiwara(psi_deg, params):
+def fujiwara_cx_cy_cn(psi_deg, params):
     """
-    Fujiwara回帰式による縦方向風圧抵抗係数 C_X(psi) を返す。
-    psi_deg: 相対風向角[deg] (0deg = 正船首からの向い風), スカラーまたは配列
+    Fujiwara(2005)の成分分離型モデルにより CX, CY, CN を計算する。
+
+    Parameters
+    ----------
+    psi_deg : 相対風向角[deg] (0-180), スカラーまたは配列
     params : dict。必要キー:
         LOA [m]  : 全長
         B   [m]  : 型幅
-        AYV [m2] : 喫水線上の側面投影面積 (= A_L)
-        AXV [m2] : 最大正面投影面積      (= A_F)
-        AOD [m2] : 甲板上構造物の側面投影面積
-        CMC [m]  : 側面積重心の船体中央からの前方距離(船首方向を正)
-        HBR [m]  : 喫水線からブリッジ最上部までの高さ
-        HC  [m]  : 側面積重心の喫水線からの高さ
+        AF  [m2] : 正面投影面積
+        AL  [m2] : 側面投影面積
+        AOD [m2] : デッキ上構造物の側面投影面積(コンテナ+ブリッジ)
+        C   [m]  : 側面積重心の船体中央からの前後座標(船首方向が正)
+        HC  [m]  : 喫水から側面積重心までの高さ
+        HBR [m]  : 喫水からブリッジ等最高構造物までの高さ
+
+    Returns
+    -------
+    CX, CY, CN (psi_degと同じ形状)
     """
     psi = np.atleast_1d(np.asarray(psi_deg, dtype=float))
     psi_rad = np.deg2rad(psi)
 
-    cx = np.zeros_like(psi)
+    LOA, B, AF, AL, AOD, C, HC, HBR = (params["LOA"], params["B"], params["AF"],
+                                         params["AL"], params["AOD"], params["C"],
+                                         params["HC"], params["HBR"])
 
-    # --- 0-90度域, 90-180度域をそれぞれ計算 ---
-    CLF_a, CXLI_a, CALF_a = _CLF_0_90(params), _CXLI_0_90(params), _CALF_0_90(params)
-    CLF_b, CXLI_b, CALF_b = _CLF_90_180(params), _CXLI_90_180(params), _CALF_90_180(params)
+    C_CF = _ALPHA[0] + _ALPHA[1] * (AF / (B * HBR)) + _ALPHA[2] * (HBR / LOA)
 
-    def cx_formula(CLF, CXLI, CALF, pr):
-        return (CLF * np.cos(pr)
-                 + CXLI * (np.sin(pr) - 0.5 * np.sin(pr) * np.cos(pr) ** 2) * np.sin(pr) * np.cos(pr)
-                 + CALF * np.sin(pr) * np.cos(pr) ** 3)
+    C_LF1 = _BETA1[0] + _BETA1[1] * (AL / (LOA * B)) + _BETA1[2] * (C / LOA)
+    C_LF2 = (_BETA2[0] + _BETA2[1] * (B / LOA) + _BETA2[2] * (HC / LOA)
+             + _BETA2[3] * (AOD / LOA ** 2) + _BETA2[4] * (AF / B ** 2))
+    C_LF = np.where(psi <= 90, C_LF1, C_LF2)
 
-    mask_a = psi <= 90.0
-    mask_b = psi > 90.0
+    C_YM1 = _GAMMA1[0] + _GAMMA1[1] * (AF / (LOA * B))
+    C_YM2 = _GAMMA2[0] + _GAMMA2[1] * (AOD / LOA ** 2)
+    C_YM = np.where(psi <= 90, C_YM1, C_YM2)
+    C_YLI = np.pi * (AL / LOA ** 2) + C_YM
 
-    cx[mask_a] = cx_formula(CLF_a, CXLI_a, CALF_a, psi_rad[mask_a])
-    cx[mask_b] = cx_formula(CLF_b, CXLI_b, CALF_b, psi_rad[mask_b])
+    C_XLI1 = _DELTA1[0] + _DELTA1[1] * (AL / (LOA * HBR)) + _DELTA1[2] * (AF / (B * HBR))
+    C_XLI2 = (_DELTA2[0] + _DELTA2[1] * (AL / (LOA * HBR)) + _DELTA2[2] * (AF / AL)
+              + _DELTA2[3] * (B / LOA) + _DELTA2[4] * (AF / (B * HBR)))
+    C_XLI = np.where(psi <= 90, C_XLI1, C_XLI2)
 
-    # --- 90度近傍の平滑化 (ITTC推奨: 単純な線形ブレンド) ---
-    lo, hi = 90.0 - MU, 90.0 + MU
-    blend = (psi >= lo) & (psi <= hi)
-    if np.any(blend):
-        cx_at_lo = cx_formula(CLF_a, CXLI_a, CALF_a, np.deg2rad(90.0))
-        cx_at_hi = cx_formula(CLF_b, CXLI_b, CALF_b, np.deg2rad(90.0))
-        w = (psi[blend] - lo) / (hi - lo)
-        cx[blend] = (1 - w) * cx_at_lo + w * cx_at_hi
+    C_ALF1 = _EPS1[0] + _EPS1[1] * (AOD / AL) + _EPS1[2] * (B / LOA)
+    C_ALF2 = _EPS2[0] + _EPS2[1] * (AOD / AL)
+    C_ALF = np.where(psi <= 90, C_ALF1, C_ALF2)
 
-    return cx if cx.size > 1 else cx[0]
+    CX = (C_LF * np.cos(psi_rad)
+          + C_XLI * (np.sin(psi_rad) - 0.5 * np.sin(psi_rad) * np.cos(psi_rad) ** 2)
+          * np.sin(psi_rad) * np.cos(psi_rad)
+          + C_ALF * np.sin(psi_rad) * np.cos(psi_rad) ** 3)
+
+    CY = (C_CF * np.sin(psi_rad) ** 2
+          + C_YLI * (np.cos(psi_rad) + 0.5 * np.sin(psi_rad) ** 2 * np.cos(psi_rad))
+          * np.sin(psi_rad) * np.cos(psi_rad))
+
+    CN = CY * (0.927 * (C / LOA) - 0.149 * (psi_rad - np.pi / 2))
+
+    return (CX[0], CY[0], CN[0]) if CX.size == 1 else (CX, CY, CN)
 
 
-def wind_resistance(psi_deg, U_A, params, rho_air=1.225):
+def cx_fujiwara(psi_deg, params):
+    """縦方向風圧抵抗係数 C_X(psi) のみを返す(fuel_consumption.py 等との互換用)。"""
+    cx, _, _ = fujiwara_cx_cy_cn(psi_deg, params)
+    return cx
+
+
+def wind_resistance(psi_deg, U_A, params, rho_air=1.222):
     """
     縦方向風圧抵抗 R_AA [N] を返す。
     U_A [m/s]: 見かけ風速(相対風速)
+    ITTC定義: R_AA = 1/2 * rho_air * U_A^2 * A_F * (-C_X)
+             (C_X<0は向かい風での抵抗=正のR_AAに対応)
     """
     cx = cx_fujiwara(psi_deg, params)
-    AXV = params["AXV"]
-    RAA = 0.5 * rho_air * U_A ** 2 * AXV * (cx)   # C_X = -C_AA (ITTC定義) -> R_AA = 1/2 rho AXV CAA U^2
+    AF = params["AF"]
+    RAA = 0.5 * rho_air * U_A ** 2 * AF * (-cx)
     return RAA, cx
 
 
 # ----------------------------------------------------------------------
-# 2. KCS(満載状態)の推定パラメータ
+# 2. KCS(満載状態, 3600TEU)の8パラメータ
+#    container_ship.py (v3) compute_AL_summary() / compute_AF_components()
+#    の計算結果をそのまま使用(スケーリング値ではない実計算値)。
 # ----------------------------------------------------------------------
-# 主要目は SIMMAN2008 / KRISO公表値(実寸)。上部構造・コンテナ搭載形状は
-# 本論文 Table1(300m/6500TEU船, LOA=318m,B=40m,d=14m,AF=1469m2,AL=7417m2,
-# AOD=4405m2)を参照し、KCS(LOA~232.5m, B=32.2m, 3600TEU級)向けに
-# 幾何相似(縮尺 λ=LOA_KCS/LOA_ref)で面積をスケーリングした概算値。
-# H_BR, H_C, CMC は主要目・一般的なコンテナ船配置から工学的に推定。
-#
-# ★実際の一般配置図がある場合は、この辞書の値を置き換えてください。
 KCS_FULL_LOAD = {
-    "LOA": 232.5,     # [m] 全長(Lpp=230.0mに船首バルブ等の張り出し分を加味)
-    "B":   32.2,       # [m] 型幅
-    "AYV": 4169.0,      # [m2] 側面投影面積 A_L (300m船 7417m2 を面積比でスケール)
-    "AXV": 774.0,       # [m2] 正面投影面積 A_F (300m船 1469m2 を面積比でスケール)
-    "AOD": 2352.0,      # [m2] 甲板上構造物側面積 A_OD(300m船 4405m2 を面積比でスケール)
-    "CMC": -10.0,       # [m] 側面積重心の船体中央からの位置(ブリッジが船尾寄りのため負=後方と仮定)
-    "HBR": 38.0,        # [m] 喫水線からブリッジ最上部までの高さ(推定)
-    "HC":  16.0,        # [m] 側面積重心の喫水線からの高さ(推定)
+    "LOA": 230.0,     # [m] 垂線間長
+    "B":   32.2,      # [m] 型幅
+    "AF":  754.5,     # [m2] 正面投影面積 (船体264.0+コンテナ1-4段348.9+5段目73.8+ブリッジ上部63.8+マスト4.0)
+    "AL":  4303.2,    # [m2] 側面投影面積 (船体1886.0+船尾コンテナ671.0+ブリッジ270.0+船首コンテナ1476.2)
+    "AOD": 2417.2,    # [m2] デッキ上構造物側面積 (船尾コンテナ671.0+ブリッジ270.0+船首コンテナ1476.2)
+    "C":   -24.2,     # [m] 側面積重心の船体中央からの位置(船首方向が正)
+                       #     container_ship.py の出力は符号規約が逆(+8.75=船尾側が正)なので反転済み
+    "HC":  10.03,     # [m] 側面積重心の喫水線からの高さ
+    "HBR": 28.20,     # [m] 喫水線からブリッジ最上部(マスト含む)までの高さ
 }
 
 
 if __name__ == "__main__":
     psi = np.linspace(0, 180, 181)
-    cx = -cx_fujiwara(psi, KCS_FULL_LOAD)
+    cx, cy, cn = fujiwara_cx_cy_cn(psi, KCS_FULL_LOAD)
 
-    U_A = 15.0  # [m/s] 例: 見かけ風速15m/s (~ BF7相当)
+    U_A = 15.0  # [m/s] 例: 見かけ風速15m/s
     RAA, _ = wind_resistance(psi, U_A, KCS_FULL_LOAD)
 
-    # ---- 結果テーブル(代表角度)----
     print("KCS 満載状態 風圧抵抗係数・風圧抵抗 (U_A = {:.1f} m/s)".format(U_A))
-    print(f"{'psi[deg]':>10}{'C_X[-]':>12}{'R_AA[kN]':>14}")
+    print(f"{'psi[deg]':>10}{'C_X[-]':>12}{'C_Y[-]':>12}{'R_AA[kN]':>14}")
     for a in [0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 180]:
         idx = list(psi).index(a)
-        print(f"{a:>10}{cx[idx]:>12.4f}{RAA[idx]/1e3:>14.2f}")
+        print(f"{a:>10}{cx[idx]:>12.4f}{cy[idx]:>12.4f}{RAA[idx]/1e3:>14.2f}")
 
-    # ---- グラフ ----
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
-    axes[0].plot(psi, cx, lw=2)
+    axes[0].plot(psi, cx, lw=2, label="$C_X$")
+    axes[0].plot(psi, cy, lw=2, label="$C_Y$", linestyle="--")
     axes[0].axhline(0, color="gray", lw=0.8)
     axes[0].set_xlabel("relative wind angle psi [deg]")
-    axes[0].set_ylabel("C_X [-]")
-    axes[0].set_title("KCS wind resistance coefficient C_X(psi)\n(Fujiwara regression, full load)")
+    axes[0].set_ylabel("Coefficient [-]")
+    axes[0].set_title("KCS wind coefficients (Fujiwara 2005, full load)")
+    axes[0].legend()
     axes[0].grid(alpha=0.3)
 
     for u in [10, 15, 20, 25]:
